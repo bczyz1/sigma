@@ -94,3 +94,6 @@ settings.json
 
 # VisualStudio
 .vs/
+
+# PyCharm
+./idea
