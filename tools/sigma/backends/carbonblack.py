@@ -101,8 +101,9 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
         except KeyError:
             raise NotSupportedError("No mapping defined for field '%s'" % key)
 
-    def handle_parent_process_path_field(self, value):
-        if value.startswith("*\\") and value.count('\\') == 1:
-            return value[2:]
-        elif value.count('\\') > 1:
-            raise NotSupportedError("Parent process path ('ParentImage') field is not supported by CarbonBlack")
+    def handle_parent_process_path_field(self, values):
+        for value in values:
+            if value.startswith("*\\") and value.count('\\') == 1:
+                return value[2:]
+            elif value.count('\\') > 1:
+                raise NotSupportedError("Parent process path ('ParentImage') field is not supported by CarbonBlack")
