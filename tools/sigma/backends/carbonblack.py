@@ -1,5 +1,5 @@
-# Output backends for sigmac
-# Copyright 2018 Thomas Patzke
+# CarbonBlack backend for sigmac created by Relativity ODA LLC
+# Bartlomiej Czyz (@bczyz1) & Mateusz Wydra (@sn0w0tter)
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -47,7 +47,6 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
         self.service = None
         self.product = None
         self.category = None
-        self.table = None
 
         self.fieldMappings = {
             "AccountName": "username",
@@ -60,7 +59,7 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
             "DestinationIsIpv6": "ipv6addr:*",
             "DestinationPort": "ipport",
             "EventType": "ActionType",
-            "Image": "process_name",
+            "Image": "path",
             "ImageLoaded": "modload",
             "Imphash": "md5",
             "NewProcessName": "process_name",
@@ -77,11 +76,6 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
             "User": "username"
         }
 
-    def default_value_mapping(self, val):
-        op = ":"
-        val = self.cleanValue(val)
-        return "%s%s" % (op, val)
-
     def generate(self, sigma_parser):
         try:
             self.category = sigma_parser.parsedyaml['logsource'].setdefault('category', None)
@@ -97,6 +91,8 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
 
     def generateMapItemNode(self, node):
         key, value = node
+        if "ParentImage" == key:
+            value = self.handle_parent_process_path_field(value)
         if type(value) == list:
             return '(' + self.generateORNode([(key, v) for v in value]) + ')'
         try:
@@ -104,3 +100,9 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
             return super().generateMapItemNode((mapping, value))
         except KeyError:
             raise NotSupportedError("No mapping defined for field '%s'" % key)
+
+    def handle_parent_process_path_field(self, value):
+        if value.startswith("*\\") and value.count('\\') == 1:
+            return value[2:]
+        elif value.count('\\') > 1:
+            raise NotSupportedError("Parent process path ('ParentImage') field is not supported by CarbonBlack")
