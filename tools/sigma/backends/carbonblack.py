@@ -26,145 +26,81 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
     identifier = "carbonblack"
     active = True
     config_required = False
-
-    # \   -> \\
-    # \*  -> \*
-    # \\* -> \\*
-    # reEscape = re.compile('("|(?<!\\\\)\\\\(?![*?\\\\]))')
-    reEscape = re.compile('(")')
+    reEscape = re.compile('([ "])')
     reClear = None
     andToken = " "
     orToken = " OR "
-    notToken = "NOT "
+    notToken = "-"
     subExpression = "(%s)"
     listExpression = "(%s)"
     listSeparator = " "
-    valueExpression = "\"%s\""
-    nullExpression = "NOT %s=\"*\""
-    notNullExpression = "%s=\"*\""
+    valueExpression = "%s"
+    nullExpression = "-%s:\"*\""
+    notNullExpression = "%s:\"*\""
     mapExpression = "%s:%s"
+    forbiddenCharacters = ['<', '>']
 
     def __init__(self, *args, **kwargs):
         """Initialize field mappings"""
         super().__init__(*args, **kwargs)
-        self.fieldMappings = {  # mapping between Sigma and ATP field names Supported values: (field name
-            # mapping, value mapping): distinct mappings for field name and value, may be a string (direct mapping)
-            # or function maps name/value to ATP target value (mapping function,): receives field name and value as
-            # parameter, return list of 2 element tuples (destination field name and value) (replacement, ): Replaces
-            # field occurrence with static string
-            "AccountName": ("username", self.default_value_mapping),
-            "Command": ("cmdline", self.default_value_mapping),
-            "CommandLine": ("cmdline", self.default_value_mapping),
-            "Company": ("company_name", self.default_value_mapping),
-            "ComputerName": ("hostname", self.default_value_mapping),
-            "DestinationHostname": ("domain", self.default_value_mapping),
-            "DestinationIp": ("ipaddr", self.default_value_mapping),
-            "DestinationIsIpv6": ("ipv6addr:*",),
-            "DestinationPort": ("ipport", self.default_value_mapping),
-            "EventType": ("ActionType", self.default_value_mapping),
-            "Image": ("process_name", self.default_value_mapping),
-            "ImageLoaded": ("modload", self.default_value_mapping),
-            "Imphash": ("md5", self.default_value_mapping),
-            "NewProcessName": ("process_name", self.default_value_mapping),
-            "OriginalFilename": ("internal_name", self.default_value_mapping),
-            "OriginalFileName": ("internal_name", self.default_value_mapping),
-            "ParentImage": ("parent_name", self.default_value_mapping),
-            "ProcessCommandLine": ("cmdline", self.default_value_mapping),
-            "Product": ("product_name", self.default_value_mapping),
-            "SourceImage": ("parent_name", self.default_value_mapping),
-            "TargetFilename": ("filemod", self.default_value_mapping),
-            "TargetImage": ("childproc_name", self.default_value_mapping),
-            "TargetObject": ("regmod", self.default_value_mapping),
-            "User": ("username", self.default_value_mapping),
+
+        self.service = None
+        self.product = None
+        self.category = None
+        self.table = None
+
+        self.fieldMappings = {
+            "AccountName": "username",
+            "Command": "cmdline",
+            "CommandLine": "cmdline",
+            "Company": "company_name",
+            "ComputerName": "hostname",
+            "DestinationHostname": "domain",
+            "DestinationIp": "ipaddr",
+            "DestinationIsIpv6": "ipv6addr:*",
+            "DestinationPort": "ipport",
+            "EventType": "ActionType",
+            "Image": "process_name",
+            "ImageLoaded": "modload",
+            "Imphash": "md5",
+            "NewProcessName": "process_name",
+            "OriginalFilename": "internal_name",
+            "OriginalFileName": "internal_name",
+            "ParentImage": "parent_name",
+            "ProcessCommandLine": "cmdline",
+            "Product": "product_name",
+            "ScriptBlockText": "cmdline",
+            "SourceImage": "parent_name",
+            "TargetFilename": "filemod",
+            "TargetImage": "childproc_name",
+            "TargetObject": "regmod",
+            "User": "username"
         }
 
     def default_value_mapping(self, val):
         op = ":"
         val = self.cleanValue(val)
-        return "%s\"%s\"" % (op, val)
+        return "%s%s" % (op, val)
 
-    def generate(self, sigmaparser):
-        self.table = None
+    def generate(self, sigma_parser):
         try:
-            self.category = sigmaparser.parsedyaml['logsource'].setdefault('category', None)
-            self.product = sigmaparser.parsedyaml['logsource'].setdefault('product', None)
-            self.service = sigmaparser.parsedyaml['logsource'].setdefault('service', None)
+            self.category = sigma_parser.parsedyaml['logsource'].setdefault('category', None)
+            self.product = sigma_parser.parsedyaml['logsource'].setdefault('product', None)
+            self.service = sigma_parser.parsedyaml['logsource'].setdefault('service', None)
         except KeyError:
-            self.category = None
-            self.product = None
-            self.service = None
-
-        # if (self.category, self.product, self.service) == ("process_creation", "windows", None):
-        #     self.table = "ProcessCreationEvents"
-        # elif (self.category, self.product, self.service) == (None, "windows", "powershell"):
-        #     self.table = "MiscEvents"
-        #     self.orToken = ", "
-
-        return super().generate(sigmaparser)
+            pass
+        result = super().generate(sigma_parser)
+        if not any(character in result for character in self.forbiddenCharacters):
+            return result
+        else:
+            raise NotSupportedError("Carbon Black search query syntax does not allow '<' and '>' characters.")
 
     def generateMapItemNode(self, node):
-        """
-        ATP queries refer to event tables instead of Windows logging event identifiers. This method catches conditions that refer to this field
-        and creates an appropriate table reference.
-        """
         key, value = node
-        if type(value) == list:  # handle map items with values list like multiple OR-chained conditions
-            return self.generateORNode(
-                [(key, v) for v in value]
-            )
-        elif key == "EventID":  # EventIDs are not reflected in condition but in table selection
-            if self.product == "windows":
-                if self.service == "sysmon" and value == 1 \
-                        or self.service == "security" and value == 4688:  # Process Execution
-                    self.table = "ProcessCreationEvents"
-                    return None
-                elif self.service == "sysmon" and value == 3:  # Network Connection
-                    self.table = "NetworkCommunicationEvents"
-                    return None
-                elif self.service == "sysmon" and value == 7:  # Image Load
-                    self.table = "ImageLoadEvents"
-                    return None
-                elif self.service == "sysmon" and value == 8:  # Create Remote Thread
-                    self.table = "MiscEvents"
-                    return "ActionType == \"CreateRemoteThreadApiCall\""
-                elif self.service == "sysmon" and value == 11:  # File Creation
-                    self.table = "FileCreationEvents"
-                    return None
-                elif self.service == "sysmon" and value == 13 \
-                        or self.service == "security" and value == 4657:  # Set Registry Value
-                    self.table = "RegistryEvents"
-                    return "ActionType == \"RegistryValueSet\""
-                elif self.service == "security" and value == 4624:
-                    self.table = "LogonEvents"
-                    return None
-        elif type(value) in (str, int):  # default value processing
-            try:
-                mapping = self.fieldMappings[key]
-            except KeyError:
-                raise NotSupportedError("No mapping defined for field '%s'" % key)
-            if len(mapping) == 1:
-                mapping = mapping[0]
-                if type(mapping) == str:
-                    return mapping
-                elif callable(mapping):
-                    conds = mapping(key, value)
-                    return self.generateSubexpressionNode(
-                        self.generateANDNode(
-                            [cond for cond in mapping(key, value)]
-                        )
-                    )
-            elif len(mapping) == 2:
-                result = list()
-                for map_item, val in zip(mapping, node):
-                    if type(map_item) == str:
-                        result.append(map_item)
-                    elif callable(map_item):
-                        result.append(map_item(val))
-                return "{}{}".format(*result)
-            else:
-                raise TypeError("Backend does not support map values of type " + str(type(value)))
-
-        return super().generateMapItemNode(node)
-
-    def generateAggregation(self, agg):
-        pass
+        if type(value) == list:
+            return '(' + self.generateORNode([(key, v) for v in value]) + ')'
+        try:
+            mapping = self.fieldMappings[key]
+            return super().generateMapItemNode((mapping, value))
+        except KeyError:
+            raise NotSupportedError("No mapping defined for field '%s'" % key)
