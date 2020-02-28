@@ -91,8 +91,9 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
 
     def generateMapItemNode(self, node):
         key, value = node
-        if "ParentImage" == key:
-            value = self.convert_parent_image_to_parent_name(value)
+        is_key_that_can_contain_path = key.endswith("Image")
+        if is_key_that_can_contain_path and type(value) == str:
+            value = self.convert_path_to_name(key, value)
         if type(value) == list:
             return '(' + self.generateORNode([(key, v) for v in value]) + ')'
         try:
@@ -102,11 +103,11 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
             raise NotSupportedError("No mapping defined for field '%s'" % key)
 
     @staticmethod
-    def convert_parent_image_to_parent_name(values):
-        for value in values:
-            is_end_of_path = value.startswith("*\\") and value.count('\\') == 1
-            is_complex_path = value.count('\\') > 1
-            if is_end_of_path:
-                return value[2:]
-            elif is_complex_path:
-                raise NotSupportedError("Parent process path ('ParentImage') field is not supported by CarbonBlack")
+    def convert_path_to_name(key, value):
+        is_full_path_supported = "Image" == key
+        is_end_of_path = value.startswith("*\\") and value.count('\\') == 1
+        is_complex_path = value.count('\\') > 1
+        if is_end_of_path:
+            return value[2:]
+        elif is_complex_path and not is_full_path_supported:
+            raise NotSupportedError("Path from '%s' field is not supported by CarbonBlack" % key)
