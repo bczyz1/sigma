@@ -19,6 +19,34 @@ import re
 from .base import SingleTextQueryBackend
 from .exceptions import NotSupportedError
 
+fieldMappings = {
+    "AccountName": "username",
+    "Command": "cmdline",
+    "CommandLine": "cmdline",
+    "Company": "company_name",
+    "ComputerName": "hostname",
+    "DestinationHostname": "domain",
+    "DestinationIp": "ipaddr",
+    "DestinationIsIpv6": "ipv6addr:*",
+    "DestinationPort": "ipport",
+    "EventType": "ActionType",
+    "Image": "path",
+    "ImageLoaded": "modload",
+    "Imphash": "md5",
+    "NewProcessName": "process_name",
+    "OriginalFilename": "internal_name",
+    "OriginalFileName": "internal_name",
+    "ParentImage": "parent_name",
+    "ProcessCommandLine": "cmdline",
+    "Product": "product_name",
+    "ScriptBlockText": "cmdline",
+    "SourceImage": "parent_name",
+    "TargetFilename": "filemod",
+    "TargetImage": "childproc_name",
+    "TargetObject": "regmod",
+    "User": "username"
+}
+
 
 class CarbonBlackResponseBackend(SingleTextQueryBackend):
     """Converts Sigma rule into Windows Defender ATP Hunting Queries."""
@@ -48,34 +76,6 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
         self.product = None
         self.category = None
 
-        self.fieldMappings = {
-            "AccountName": "username",
-            "Command": "cmdline",
-            "CommandLine": "cmdline",
-            "Company": "company_name",
-            "ComputerName": "hostname",
-            "DestinationHostname": "domain",
-            "DestinationIp": "ipaddr",
-            "DestinationIsIpv6": "ipv6addr:*",
-            "DestinationPort": "ipport",
-            "EventType": "ActionType",
-            "Image": "path",
-            "ImageLoaded": "modload",
-            "Imphash": "md5",
-            "NewProcessName": "process_name",
-            "OriginalFilename": "internal_name",
-            "OriginalFileName": "internal_name",
-            "ParentImage": "parent_name",
-            "ProcessCommandLine": "cmdline",
-            "Product": "product_name",
-            "ScriptBlockText": "cmdline",
-            "SourceImage": "parent_name",
-            "TargetFilename": "filemod",
-            "TargetImage": "childproc_name",
-            "TargetObject": "regmod",
-            "User": "username"
-        }
-
     def generate(self, sigma_parser):
         try:
             self.category = sigma_parser.parsedyaml['logsource'].setdefault('category', None)
@@ -92,18 +92,21 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
     def generateMapItemNode(self, node):
         key, value = node
         if "ParentImage" == key:
-            value = self.handle_parent_process_path_field(value)
+            value = self.convert_parent_image_to_parent_name(value)
         if type(value) == list:
             return '(' + self.generateORNode([(key, v) for v in value]) + ')'
         try:
-            mapping = self.fieldMappings[key]
+            mapping = fieldMappings[key]
             return super().generateMapItemNode((mapping, value))
         except KeyError:
             raise NotSupportedError("No mapping defined for field '%s'" % key)
 
-    def handle_parent_process_path_field(self, values):
+    @staticmethod
+    def convert_parent_image_to_parent_name(values):
         for value in values:
-            if value.startswith("*\\") and value.count('\\') == 1:
+            is_end_of_path = value.startswith("*\\") and value.count('\\') == 1
+            is_complex_path = value.count('\\') > 1
+            if is_end_of_path:
                 return value[2:]
-            elif value.count('\\') > 1:
+            elif is_complex_path:
                 raise NotSupportedError("Parent process path ('ParentImage') field is not supported by CarbonBlack")
