@@ -15,7 +15,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import re
+import sigma
 
+from ..parser.modifiers.base import SigmaTypeModifier
 from .base import SingleTextQueryBackend
 from .exceptions import NotSupportedError
 
@@ -54,7 +56,7 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
     identifier = "carbonblack"
     active = True
     config_required = False
-    reEscape = re.compile('([ "])')
+    reEscape = re.compile('([ "()\\\\])')
     reClear = None
     andToken = " "
     orToken = " OR "
@@ -63,10 +65,11 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
     listExpression = "(%s)"
     listSeparator = " "
     valueExpression = "%s"
-    nullExpression = "-%s:\"*\""
-    notNullExpression = "%s:\"*\""
+    nullExpression = "-%s:*"
+    notNullExpression = "%s:*"
     mapExpression = "%s:%s"
     forbiddenCharacters = ['<', '>']
+    double_negation = '-(-'
 
     def __init__(self, *args, **kwargs):
         """Initialize field mappings"""
@@ -84,16 +87,21 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
         except KeyError:
             pass
         result = super().generate(sigma_parser)
-        if not any(character in result for character in self.forbiddenCharacters):
-            return result
-        else:
+        if any(character in result for character in self.forbiddenCharacters):
             raise NotSupportedError("Carbon Black search query syntax does not allow '<' and '>' characters.")
+        if self.double_negation in result:
+            result = result.replace(self.double_negation, '(')
+        return result
 
     def generateMapItemNode(self, node):
         key, value = node
         is_key_that_can_contain_path = key.endswith("Image")
-        if is_key_that_can_contain_path and type(value) == str:
-            value = self.convert_path_to_name(key, value)
+        if type(value) == str:
+            if key == "CommandLine":
+                return self.generateNode(SigmaCarbonBlackCmdLineModifier(value))
+            if is_key_that_can_contain_path:
+                value = self.convert_path_to_name(key, value)
+            value = self.remove_trailing_whitespaces(value)
         if type(value) == list:
             return '(' + self.generateORNode([(key, v) for v in value]) + ')'
         try:
@@ -102,12 +110,40 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
         except KeyError:
             raise NotSupportedError("No mapping defined for field '%s'" % key)
 
+    def generateTypedValueNode(self, node):
+        if isinstance(node, SigmaCarbonBlackCmdLineModifier) and isinstance(node.value, str):
+            command_line = self.remove_trailing_whitespaces(node.value)
+            command_line = self.remove_leading_wildcard(command_line)
+            return '(cmdline:' + command_line + ')'
+        # super().generateTypedValueNode(node)
+
+    @staticmethod
+    def remove_trailing_whitespaces(value):
+        if value.startswith("* "):
+            value = "%s%s" % (value[0], value[2:])
+        if value.endswith(" *"):
+            value = "%s%s" % (value[0:-2], value[-1])
+        return value
+
+    @staticmethod
+    def remove_leading_wildcard(value):
+        if value.startswith("*"):
+            value = "%s" % (value[1:])
+        return value
+
     @staticmethod
     def convert_path_to_name(key, value):
         is_full_path_supported = "Image" == key
         is_end_of_path = value.startswith("*\\") and value.count('\\') == 1
         is_complex_path = value.count('\\') > 1
         if is_end_of_path:
-            return value[2:]
+            return value[2:]  # leading wildcards carry a significant performance penalty for the search
         elif is_complex_path and not is_full_path_supported:
             raise NotSupportedError("Path from '%s' field is not supported by CarbonBlack" % key)
+        else:
+            return value
+
+
+class SigmaCarbonBlackCmdLineModifier(SigmaTypeModifier):
+    """Do not invoke any regular expressions on CarbonBlack search paramter 'cmdline'.
+    This was needed due to tokenization process implemented within CarbonBlack"""
