@@ -46,7 +46,8 @@ fieldMappings = {
     "TargetFilename": "filemod",
     "TargetImage": "childproc_name",
     "TargetObject": "regmod",
-    "User": "username"
+    "User": "username",
+    "CertificatePublisher": "digsig_publisher"
 }
 
 
@@ -56,8 +57,8 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
     identifier = "carbonblack"
     active = True
     config_required = False
-    reEscape = re.compile('([ "()\\\\])')
-    reClear = None
+    reEscape = re.compile('([ \"()])')
+    reClear = re.compile('[<>]')
     andToken = " "
     orToken = " OR "
     notToken = "-"
@@ -112,10 +113,41 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
 
     def generateTypedValueNode(self, node):
         if isinstance(node, SigmaCarbonBlackCmdLineModifier) and isinstance(node.value, str):
-            command_line = self.remove_trailing_whitespaces(node.value)
-            command_line = self.remove_leading_wildcard(command_line)
+            command_line = node.value.strip()
+            command_line = self.remove_backslashes_and_wildcards(command_line)
+            command_line = self.remove_trailing_whitespaces(command_line)
+            command_line = command_line.strip()
+            command_line = self.reEscape.sub(self.escapeSubst, command_line)
+            command_line = self.reClear.sub("", command_line)
             return '(cmdline:' + command_line + ')'
-        # super().generateTypedValueNode(node)
+
+    def cleanValue(self, val):
+        val = val.strip()
+        val = super().cleanValue(val)
+        val = self.remove_backslashes_and_wildcards(val)
+        val = val.strip()
+        return val
+
+    @staticmethod
+    def remove_backslashes_and_wildcards(val):
+        if isinstance(val, str):
+            if val.startswith("*"):
+                val = val.replace("*", "", 1)
+            if val.startswith("\\"):
+                val = val.replace("\\", "", 1)
+            if val.startswith("*\\"):
+                val = val.replace("*\\", "*")
+            if val.startswith("*/"):
+                val = val.replace("*/", "*")
+            if val.startswith("*"):
+                val = val.replace("*", "")
+            if val.endswith("\\\\*"):
+                val = val.replace("\\\\*", "*")
+            if val.endswith("\\*"):
+                val = val.replace("\\*", "*")
+            if val.endswith("/*"):
+                val = val.replace("/*", "*")
+        return val
 
     @staticmethod
     def remove_trailing_whitespaces(value):
@@ -123,12 +155,6 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
             value = "%s%s" % (value[0], value[2:])
         if value.endswith(" *"):
             value = "%s%s" % (value[0:-2], value[-1])
-        return value
-
-    @staticmethod
-    def remove_leading_wildcard(value):
-        if value.startswith("*"):
-            value = "%s" % (value[1:])
         return value
 
     @staticmethod
@@ -145,5 +171,5 @@ class CarbonBlackResponseBackend(SingleTextQueryBackend):
 
 
 class SigmaCarbonBlackCmdLineModifier(SigmaTypeModifier):
-    """Do not invoke any regular expressions on CarbonBlack search paramter 'cmdline'.
+    """Do not invoke the default value cleaning on CarbonBlack search paramter 'cmdline'.
     This was needed due to tokenization process implemented within CarbonBlack"""
